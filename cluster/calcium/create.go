@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/cornelk/hashmap"
+
 	"github.com/projecteru2/core/cluster"
 	enginetypes "github.com/projecteru2/core/engine/types"
 	"github.com/projecteru2/core/log"
@@ -316,6 +318,7 @@ func (c *Calcium) doDeployOneWorkload(
 				return errors.WithStack(err)
 			}
 			workload.ID = created.ID
+			workload.Labels["DMIUUID"] = created.DmiUUID
 			// We couldn't WAL the workload ID above VirtualizationCreate temporarily,
 			// so there's a time gap window, once the core process crashes between
 			// VirtualizationCreate and logCreateWorkload then the worload is leaky.
@@ -484,6 +487,8 @@ func (c *Calcium) doMakeWorkloadOptions(ctx context.Context, no int, msg *types.
 	for key, value := range opts.Labels {
 		config.Labels[key] = value
 	}
+
+	config.Labels["UUIDSeqVirt"] = strconv.Itoa(no)
 
 	return config
 }

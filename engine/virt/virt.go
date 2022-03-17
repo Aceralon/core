@@ -34,7 +34,8 @@ const (
 	ImageUserKey = "ImageUser"
 	// Type indicate type
 	Type = "virt"
-
+	// UUIDSeq indicateds the sequence no of uuid
+	UUIDSeq = "UUIDSeqVirt"
 	ttyFlag = "tty"
 )
 
@@ -197,12 +198,24 @@ func (v *Virt) VirtualizationCreate(ctx context.Context, opts *enginetypes.Virtu
 		Stdin:      opts.Stdin,
 	}
 
+	uuids := strings.Split(opts.Labels[DmiUUIDKey], ",")
+	if len(uuids) > 1 {
+		uuidNum, err := strconv.Atoi(opts.Labels[UUIDSeq])
+		if err != nil {
+			return nil, err
+		}
+		if uuidNum >= len(uuids) {
+			return nil, types.ErrNotEnoughUUID
+		}
+		req.DmiUUID = uuids[uuidNum]
+	}
+
 	var resp virttypes.Guest
 	if resp, err = v.client.CreateGuest(ctx, req); err != nil {
 		return nil, err
 	}
 
-	return &enginetypes.VirtualizationCreated{ID: resp.ID, Name: opts.Name}, nil
+	return &enginetypes.VirtualizationCreated{ID: resp.ID, Name: opts.Name, DmiUUID: req.DmiUUID}, nil
 }
 
 // VirtualizationResourceRemap .
