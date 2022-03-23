@@ -318,7 +318,9 @@ func (c *Calcium) doDeployOneWorkload(
 				return errors.WithStack(err)
 			}
 			workload.ID = created.ID
-			workload.Labels["DMIUUID"] = created.DmiUUID
+			if len(created.DmiUUID) > 0 {
+				workload.Labels["DMIUUID"] = created.DmiUUID
+			}
 			// We couldn't WAL the workload ID above VirtualizationCreate temporarily,
 			// so there's a time gap window, once the core process crashes between
 			// VirtualizationCreate and logCreateWorkload then the worload is leaky.
