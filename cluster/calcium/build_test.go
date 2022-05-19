@@ -8,8 +8,7 @@ import (
 	"testing"
 
 	enginemocks "github.com/projecteru2/core/engine/mocks"
-	"github.com/projecteru2/core/resources"
-	resourcemocks "github.com/projecteru2/core/resources/mocks"
+	schedulermocks "github.com/projecteru2/core/scheduler/mocks"
 	storemocks "github.com/projecteru2/core/store/mocks"
 	"github.com/projecteru2/core/types"
 
@@ -83,18 +82,13 @@ func TestBuild(t *testing.T) {
 		Engine:    engine,
 	}
 	store.On("GetNodesByPod", mock.AnythingOfType("*context.emptyCtx"), mock.Anything, mock.Anything, mock.Anything).Return([]*types.Node{node}, nil)
-
-	plugin := c.resource.GetPlugins()[0].(*resourcemocks.Plugin)
-
-	// failed by plugin error
-	plugin.On("GetMostIdleNode", mock.Anything, mock.Anything).Return(nil, types.ErrGetMostIdleNodeFailed).Once()
+	scheduler := &schedulermocks.Scheduler{}
+	c.scheduler = scheduler
+	// failed by MaxIdleNode
+	scheduler.On("MaxIdleNode", mock.AnythingOfType("[]*types.Node")).Return(nil, types.ErrBadMeta).Once()
 	ch, err = c.BuildImage(ctx, opts)
 	assert.Error(t, err)
-
-	plugin.On("GetMostIdleNode", mock.Anything, mock.Anything).Return(&resources.GetMostIdleNodeResponse{NodeName: node.Name, Priority: 100}, nil)
-	plugin.On("GetNodeResourceInfo", mock.Anything, mock.Anything, mock.Anything).Return(&resources.GetNodeResourceInfoResponse{
-		ResourceInfo: &resources.NodeResourceInfo{},
-	}, nil)
+	scheduler.On("MaxIdleNode", mock.AnythingOfType("[]*types.Node")).Return(node, nil)
 	// create image
 	c.config.Docker.Hub = "test.com"
 	c.config.Docker.Namespace = "test"

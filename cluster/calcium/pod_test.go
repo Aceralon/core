@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	lockmocks "github.com/projecteru2/core/lock/mocks"
-	"github.com/projecteru2/core/resources"
-	resourcemocks "github.com/projecteru2/core/resources/mocks"
 	storemocks "github.com/projecteru2/core/store/mocks"
 	"github.com/projecteru2/core/types"
 
@@ -38,11 +36,6 @@ func TestAddPod(t *testing.T) {
 func TestRemovePod(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
-	plugin := c.resource.GetPlugins()[0].(*resourcemocks.Plugin)
-	plugin.On("GetNodeResourceInfo", mock.Anything, mock.Anything, mock.Anything).Return(&resources.GetNodeResourceInfoResponse{
-		ResourceInfo: &resources.NodeResourceInfo{},
-		Diffs:        []string{"hhh"},
-	}, nil)
 
 	assert.Error(t, c.RemovePod(ctx, ""))
 

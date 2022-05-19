@@ -3,10 +3,11 @@ package calcium
 import (
 	"context"
 
-	"github.com/sanity-io/litter"
-
+	"github.com/projecteru2/core/engine"
 	enginetypes "github.com/projecteru2/core/engine/types"
 	"github.com/projecteru2/core/log"
+	"github.com/projecteru2/core/resources"
+	resourcetypes "github.com/projecteru2/core/resources/types"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
 
@@ -16,62 +17,157 @@ import (
 // ReallocResource updates workload resource dynamically
 func (c *Calcium) ReallocResource(ctx context.Context, opts *types.ReallocOptions) (err error) {
 	logger := log.WithField("Calcium", "ReallocResource").WithField("opts", opts)
-	log.Infof(ctx, "[ReallocResource] realloc workload %v with options %v", opts.ID, opts.ResourceOpts)
 	workload, err := c.GetWorkload(ctx, opts.ID)
 	if err != nil {
 		return
 	}
-	// copy origin workload
-	originWorkload := *workload
 	return c.withNodePodLocked(ctx, workload.Nodename, func(ctx context.Context, node *types.Node) error {
+
 		return c.withWorkloadLocked(ctx, opts.ID, func(ctx context.Context, workload *types.Workload) error {
-			return logger.Err(ctx, c.doReallocOnNode(ctx, node, workload, originWorkload, opts))
+			rrs, err := resources.MakeRequests(
+				types.ResourceOptions{
+					CPUQuotaRequest: utils.Round(workload.CPUQuotaRequest + opts.ResourceOpts.CPUQuotaRequest),
+					CPUQuotaLimit:   utils.Round(workload.CPUQuotaLimit + opts.ResourceOpts.CPUQuotaLimit),
+					CPUBind:         types.ParseTriOption(opts.CPUBindOpts, len(workload.CPU) > 0),
+					CPU:             workload.CPU,
+					MemoryRequest:   workload.MemoryRequest + opts.ResourceOpts.MemoryRequest,
+					MemoryLimit:     workload.MemoryLimit + opts.ResourceOpts.MemoryLimit,
+					StorageRequest:  workload.StorageRequest + opts.ResourceOpts.StorageRequest,
+					StorageLimit:    workload.StorageLimit + opts.ResourceOpts.StorageLimit,
+					VolumeRequest:   types.MergeVolumeBindings(workload.VolumeRequest, opts.ResourceOpts.VolumeRequest),
+					VolumeLimit:     types.MergeVolumeBindings(workload.VolumeLimit, opts.ResourceOpts.VolumeLimit),
+					VolumeExist:     workload.VolumePlanRequest,
+				},
+			)
+			if err != nil {
+				return logger.Err(ctx, err)
+			}
+			return logger.Err(ctx, c.doReallocOnNode(ctx, node, workload, rrs))
 		})
 	})
 }
 
-func (c *Calcium) doReallocOnNode(ctx context.Context, node *types.Node, workload *types.Workload, originWorkload types.Workload, opts *types.ReallocOptions) error {
-	var resourceArgs map[string]types.WorkloadResourceArgs
-	var deltaResourceArgs map[string]types.WorkloadResourceArgs
-	var engineArgs types.EngineArgs
-	var err error
+// transaction: node resource
+func (c *Calcium) doReallocOnNode(ctx context.Context, node *types.Node, workload *types.Workload, rrs resourcetypes.ResourceRequests) (err error) {
+	node.RecycleResources(&workload.ResourceMeta)
+	plans, err := resources.SelectNodesByResourceRequests(ctx, rrs, map[string]*types.Node{node.Name: node})
+	if err != nil {
+		return err
+	}
 
-	err = utils.Txn(
+	originalWorkload := *workload
+	resourceMeta := &types.ResourceMeta{}
+	if err = utils.Txn(
 		ctx,
-		// if: update workload resource
-		func(ctx context.Context) error {
-			// note here will change the node resource meta (stored in resource plugin)
-			// todo: add wal here
-			engineArgs, deltaResourceArgs, resourceArgs, err = c.resource.Realloc(ctx, workload.Nodename, workload.ResourceArgs, opts.ResourceOpts)
-			if err != nil {
-				return err
+
+		// if update workload resources
+		func(ctx context.Context) (err error) {
+			resourceMeta := &types.ResourceMeta{}
+			for _, plan := range plans {
+				if resourceMeta, err = plan.Dispense(resourcetypes.DispenseOptions{
+					Node: node,
+				}, resourceMeta); err != nil {
+					return err
+				}
 			}
-			log.Debugf(ctx, "[doReallocOnNode] realloc workload %v, resource args %v, engine args %v", workload.ID, litter.Sdump(resourceArgs), litter.Sdump(engineArgs))
-			workload.EngineArgs = engineArgs
-			workload.ResourceArgs = resourceArgs
-			return c.store.UpdateWorkload(ctx, workload)
+
+			return c.doReallocWorkloadsOnInstance(ctx, node.Engine, resourceMeta, workload)
 		},
-		// then: update virtualization
+		// then commit changes
 		func(ctx context.Context) error {
-			return node.Engine.VirtualizationUpdateResource(ctx, opts.ID, &enginetypes.VirtualizationResource{EngineArgs: engineArgs})
+			for _, plan := range plans {
+				plan.ApplyChangesOnNode(node, 0)
+			}
+			return errors.WithStack(c.store.UpdateNodes(ctx, node))
 		},
-		// rollback: revert the resource changes and rollback workload meta
+		// no need rollback
+		func(ctx context.Context, failureByCond bool) (err error) {
+			if failureByCond {
+				return
+			}
+			r := &types.ResourceMeta{
+				CPUQuotaRequest:   originalWorkload.CPUQuotaRequest,
+				CPUQuotaLimit:     originalWorkload.CPUQuotaLimit,
+				CPU:               originalWorkload.CPU,
+				NUMANode:          originalWorkload.NUMANode,
+				MemoryRequest:     originalWorkload.MemoryRequest,
+				MemoryLimit:       originalWorkload.MemoryLimit,
+				VolumeRequest:     originalWorkload.VolumeRequest,
+				VolumeLimit:       originalWorkload.VolumeLimit,
+				VolumePlanRequest: originalWorkload.VolumePlanRequest,
+				VolumePlanLimit:   originalWorkload.VolumePlanLimit,
+				VolumeChanged:     resourceMeta.VolumeChanged,
+				StorageRequest:    originalWorkload.StorageRequest,
+				StorageLimit:      originalWorkload.StorageLimit,
+			}
+			return c.doReallocWorkloadsOnInstance(ctx, node.Engine, r, workload)
+		},
+
+		c.config.GlobalTimeout,
+	); err != nil {
+		return
+	}
+
+	go c.doRemapResourceAndLog(ctx, log.WithField("Calcium", "doReallocOnNode"), node)
+	return nil
+}
+
+func (c *Calcium) doReallocWorkloadsOnInstance(ctx context.Context, engine engine.API, resourceMeta *types.ResourceMeta, workload *types.Workload) (err error) {
+
+	originalWorkload := *workload
+	return utils.Txn(
+		ctx,
+
+		// if: update workload resources
+		func(ctx context.Context) error {
+			r := &enginetypes.VirtualizationResource{
+				CPU:           resourceMeta.CPU,
+				Quota:         resourceMeta.CPUQuotaLimit,
+				NUMANode:      resourceMeta.NUMANode,
+				Memory:        resourceMeta.MemoryLimit,
+				Volumes:       resourceMeta.VolumeLimit.ToStringSlice(false, false),
+				VolumePlan:    resourceMeta.VolumePlanLimit.ToLiteral(),
+				VolumeChanged: resourceMeta.VolumeChanged,
+				Storage:       resourceMeta.StorageLimit,
+			}
+			return errors.WithStack(engine.VirtualizationUpdateResource(ctx, workload.ID, r))
+		},
+
+		// then: update workload meta
+		func(ctx context.Context) error {
+			workload.CPUQuotaRequest = resourceMeta.CPUQuotaRequest
+			workload.CPUQuotaLimit = resourceMeta.CPUQuotaLimit
+			workload.CPU = resourceMeta.CPU
+			workload.NUMANode = resourceMeta.NUMANode
+			workload.MemoryRequest = resourceMeta.MemoryRequest
+			workload.MemoryLimit = resourceMeta.MemoryLimit
+			workload.VolumeRequest = resourceMeta.VolumeRequest
+			workload.VolumePlanRequest = resourceMeta.VolumePlanRequest
+			workload.VolumeLimit = resourceMeta.VolumeLimit
+			workload.VolumePlanLimit = resourceMeta.VolumePlanLimit
+			workload.StorageRequest = resourceMeta.StorageRequest
+			workload.StorageLimit = resourceMeta.StorageLimit
+			return errors.WithStack(c.store.UpdateWorkload(ctx, workload))
+		},
+
+		// rollback: workload meta
 		func(ctx context.Context, failureByCond bool) error {
 			if failureByCond {
 				return nil
 			}
-			if err := c.resource.RollbackRealloc(ctx, workload.Nodename, deltaResourceArgs); err != nil {
-				log.Errorf(ctx, "[doReallocOnNode] failed to rollback workload %v, resource args %v, engine args %v, err %v", workload.ID, litter.Sdump(resourceArgs), litter.Sdump(engineArgs), err)
-				// don't return here, so the node resource can still be fixed
+			r := &enginetypes.VirtualizationResource{
+				CPU:           originalWorkload.CPU,
+				Quota:         originalWorkload.CPUQuotaLimit,
+				NUMANode:      originalWorkload.NUMANode,
+				Memory:        originalWorkload.MemoryLimit,
+				Volumes:       originalWorkload.VolumeLimit.ToStringSlice(false, false),
+				VolumePlan:    originalWorkload.VolumePlanLimit.ToLiteral(),
+				VolumeChanged: resourceMeta.VolumeChanged,
+				Storage:       originalWorkload.StorageLimit,
 			}
-			return errors.WithStack(c.store.UpdateWorkload(ctx, &originWorkload))
+			return errors.WithStack(engine.VirtualizationUpdateResource(ctx, workload.ID, r))
 		},
+
 		c.config.GlobalTimeout,
 	)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	go c.SendNodeMetrics(ctx, node.Name)
-	go c.doRemapResourceAndLog(ctx, log.WithField("Calcium", "doReallocOnNode"), node)
-	return nil
 }

@@ -61,7 +61,17 @@ func (c *Calcium) ReplaceWorkload(ctx context.Context, opts *types.ReplaceOption
 							}
 							// 使用复制之后的配置
 							// 停老的，起新的
-							// replaceOpts.ResourceOpts = workload.ResourceUsage
+							replaceOpts.ResourceOpts = types.ResourceOptions{
+								CPUQuotaRequest: workload.CPUQuotaRequest,
+								CPUQuotaLimit:   workload.CPUQuotaLimit,
+								CPUBind:         len(workload.CPU) > 0,
+								MemoryRequest:   workload.MemoryRequest,
+								MemoryLimit:     workload.MemoryLimit,
+								StorageRequest:  workload.StorageRequest,
+								StorageLimit:    workload.StorageLimit,
+								VolumeRequest:   workload.VolumeRequest,
+								VolumeLimit:     workload.VolumeLimit,
+							}
 							// 覆盖 podname 如果做全量更新的话
 							replaceOpts.Podname = workload.Podname
 							// 覆盖 Volumes
@@ -136,15 +146,21 @@ func (c *Calcium) doReplaceWorkload(
 		})
 	}
 
-	// copy resource args
 	createMessage := &types.CreateWorkloadMessage{
-		ResourceArgs: map[string]types.WorkloadResourceArgs{},
-		EngineArgs:   workload.EngineArgs,
+		ResourceMeta: types.ResourceMeta{
+			MemoryRequest:     workload.MemoryRequest,
+			MemoryLimit:       workload.MemoryLimit,
+			StorageRequest:    workload.StorageRequest,
+			StorageLimit:      workload.StorageLimit,
+			CPUQuotaRequest:   workload.CPUQuotaRequest,
+			CPUQuotaLimit:     workload.CPUQuotaLimit,
+			CPU:               workload.CPU,
+			VolumeRequest:     workload.VolumeRequest,
+			VolumePlanRequest: workload.VolumePlanRequest,
+			VolumeLimit:       workload.VolumeLimit,
+			VolumePlanLimit:   workload.VolumePlanLimit,
+		},
 	}
-	for plugin, rawParams := range workload.ResourceArgs {
-		createMessage.ResourceArgs[plugin] = rawParams
-	}
-
 	if err = utils.Txn(
 		ctx,
 		// if

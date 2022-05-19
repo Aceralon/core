@@ -2,11 +2,14 @@ package strategy
 
 import (
 	"context"
-
-	"github.com/pkg/errors"
+	"math"
 
 	"github.com/projecteru2/core/log"
+	resourcetypes "github.com/projecteru2/core/resources/types"
 	"github.com/projecteru2/core/types"
+	"github.com/projecteru2/core/utils"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -33,17 +36,17 @@ var Plans = map[string]strategyFunc{
 type strategyFunc = func(_ context.Context, _ []Info, need, total, limit int) (map[string]int, error)
 
 // Deploy .
-func Deploy(ctx context.Context, strategy string, count, nodesLimit int, strategyInfos []Info, total int) (map[string]int, error) {
-	deployMethod, ok := Plans[strategy]
+func Deploy(ctx context.Context, opts *types.DeployOptions, strategyInfos []Info, total int) (map[string]int, error) {
+	deployMethod, ok := Plans[opts.DeployStrategy]
 	if !ok {
 		return nil, errors.WithStack(types.ErrBadDeployStrategy)
 	}
-	if count <= 0 {
+	if opts.Count <= 0 {
 		return nil, errors.WithStack(types.ErrBadCount)
 	}
 
-	log.Debugf(ctx, "[strategy.Deploy] infos %+v, need %d, total %d, limit %d", strategyInfos, count, total, nodesLimit)
-	return deployMethod(ctx, strategyInfos, count, total, nodesLimit)
+	log.Debugf(ctx, "[strategy.Deploy] infos %+v, need %d, total %d, limit %d", strategyInfos, opts.Count, total, opts.NodesLimit)
+	return deployMethod(ctx, strategyInfos, opts.Count, total, opts.NodesLimit)
 }
 
 // Info .
@@ -55,4 +58,26 @@ type Info struct {
 
 	Capacity int
 	Count    int
+}
+
+// NewInfos .
+// TODO strange name, need to revise
+func NewInfos(resourceRequests resourcetypes.ResourceRequests, nodeMap map[string]*types.Node, plans []resourcetypes.ResourcePlans) (strategyInfos []Info) {
+	for nodename, node := range nodeMap {
+		capacity := math.MaxInt64
+		for _, plan := range plans {
+			capacity = utils.Min(capacity, plan.Capacity()[nodename])
+		}
+		if capacity <= 0 {
+			continue
+		}
+
+		strategyInfos = append(strategyInfos, Info{
+			Nodename: nodename,
+			Rate:     resourceRequests.MainRateOnNode(*node),
+			Usage:    resourceRequests.MainUsageOnNode(*node),
+			Capacity: capacity,
+		})
+	}
+	return
 }

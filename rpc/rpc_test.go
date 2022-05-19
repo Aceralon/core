@@ -65,9 +65,11 @@ func TestAddNode(t *testing.T) {
 func TestSetNodeTranform(t *testing.T) {
 	b := &pb.SetNodeOptions{
 		Nodename: "a",
+		DeltaCpu: map[string]int32{"0": 1, "1": -1},
 	}
-	_, err := toCoreSetNodeOptions(b)
+	o, err := toCoreSetNodeOptions(b)
 	assert.Nil(t, err)
+	assert.Equal(t, 2, len(o.DeltaCPU))
 }
 
 func TestRunAndWaitSync(t *testing.T) {
@@ -85,7 +87,7 @@ func TestRunAndWaitSync(t *testing.T) {
 			Podname:      "pod",
 			Image:        "image",
 			OpenStdin:    false,
-			ResourceOpts: map[string]*pb.RawParam{},
+			ResourceOpts: &pb.ResourceOptions{},
 		},
 		Cmd:   []byte("ping"),
 		Async: false,
@@ -144,7 +146,7 @@ func TestRunAndWaitAsync(t *testing.T) {
 			Podname:      "pod",
 			Image:        "image",
 			OpenStdin:    false,
-			ResourceOpts: map[string]*pb.RawParam{},
+			ResourceOpts: &pb.ResourceOptions{},
 		},
 		Cmd:   []byte("ping"),
 		Async: true,

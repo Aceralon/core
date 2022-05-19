@@ -4,9 +4,7 @@ import (
 	"context"
 	"sort"
 
-	enginefactory "github.com/projecteru2/core/engine/factory"
 	"github.com/projecteru2/core/log"
-	"github.com/projecteru2/core/resources"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
 
@@ -21,49 +19,9 @@ func (c *Calcium) AddNode(ctx context.Context, opts *types.AddNodeOptions) (*typ
 	if err := opts.Validate(); err != nil {
 		return nil, logger.Err(ctx, err)
 	}
-	var resourceCapacity map[string]types.NodeResourceArgs
-	var resourceUsage map[string]types.NodeResourceArgs
-	var node *types.Node
-	var err error
-
-	// check if the node is alive
-	client, err := enginefactory.GetEngine(ctx, c.config, opts.Nodename, opts.Endpoint, opts.Ca, opts.Cert, opts.Key)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	// get node info
-	nodeInfo, err := client.Info(ctx)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return node, logger.Err(ctx, utils.Txn(
-		ctx,
-		// if: add node resource with resource plugins
-		func(ctx context.Context) error {
-			resourceCapacity, resourceUsage, err = c.resource.AddNode(ctx, opts.Nodename, opts.ResourceOpts, nodeInfo)
-			return errors.WithStack(err)
-		},
-		// then: add node meta in store
-		func(ctx context.Context) error {
-			node, err = c.store.AddNode(ctx, opts)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			node.ResourceCapacity = resourceCapacity
-			node.ResourceUsage = resourceUsage
-			go c.SendNodeMetrics(ctx, node.Name)
-			return nil
-		},
-		// rollback: remove node with resource plugins
-		func(ctx context.Context, failureByCond bool) error {
-			if failureByCond {
-				return nil
-			}
-			return errors.WithStack(c.resource.RemoveNode(ctx, opts.Nodename))
-		},
-		c.config.GlobalTimeout),
-	)
+	opts.Normalize()
+	node, err := c.store.AddNode(ctx, opts)
+	return node, logger.Err(ctx, errors.WithStack(err))
 }
 
 // RemoveNode remove a node
@@ -80,22 +38,7 @@ func (c *Calcium) RemoveNode(ctx context.Context, nodename string) error {
 		if len(ws) > 0 {
 			return logger.Err(ctx, errors.WithStack(types.ErrNodeNotEmpty))
 		}
-
-		return logger.Err(ctx, utils.Txn(ctx,
-			// if: remove node metadata
-			func(ctx context.Context) error {
-				return errors.WithStack(c.store.RemoveNode(ctx, node))
-			},
-			// then: remove node resource metadata
-			func(ctx context.Context) error {
-				return errors.WithStack(c.resource.RemoveNode(ctx, nodename))
-			},
-			// rollback: do nothing
-			func(ctx context.Context, failureByCond bool) error {
-				return nil
-			},
-			c.config.GlobalTimeout,
-		))
+		return logger.Err(ctx, errors.WithStack(c.store.RemoveNode(ctx, node)))
 	})
 }
 
@@ -124,9 +67,6 @@ func (c *Calcium) ListPodNodes(ctx context.Context, opts *types.ListNodesOptions
 					if err != nil {
 						logger.Errorf(ctx, "failed to get node %v info: %+v", node.Name, err)
 					}
-					if err := c.getNodeResourceInfo(ctx, node); err != nil {
-						logger.Errorf(ctx, "failed to get node %v resource info: %+v", node.Name, err)
-					}
 					ch <- node
 				}
 			}(node))
@@ -137,18 +77,13 @@ func (c *Calcium) ListPodNodes(ctx context.Context, opts *types.ListNodesOptions
 }
 
 // GetNode get node
-func (c *Calcium) GetNode(ctx context.Context, nodename string) (node *types.Node, err error) {
+func (c *Calcium) GetNode(ctx context.Context, nodename string) (*types.Node, error) {
 	logger := log.WithField("Calcium", "GetNode").WithField("nodename", nodename)
 	if nodename == "" {
 		return nil, logger.Err(ctx, errors.WithStack(types.ErrEmptyNodeName))
 	}
-	if node, err = c.store.GetNode(ctx, nodename); err != nil {
-		return nil, logger.Err(ctx, errors.WithStack(err))
-	}
-	if err = c.getNodeResourceInfo(ctx, node); err != nil {
-		return nil, logger.Err(ctx, errors.WithStack(err))
-	}
-	return node, nil
+	node, err := c.store.GetNode(ctx, nodename)
+	return node, logger.Err(ctx, errors.WithStack(err))
 }
 
 // GetNodeEngine get node engine
@@ -174,6 +109,7 @@ func (c *Calcium) SetNode(ctx context.Context, opts *types.SetNodeOptions) (*typ
 	var n *types.Node
 	return n, c.withNodePodLocked(ctx, opts.Nodename, func(ctx context.Context, node *types.Node) error {
 		logger.Infof(ctx, "set node")
+		opts.Normalize(node)
 		n = node
 
 		n.Bypass = (opts.BypassOpt == types.TriTrue) || (opts.BypassOpt == types.TriKeep && n.Bypass)
@@ -183,7 +119,6 @@ func (c *Calcium) SetNode(ctx context.Context, opts *types.SetNodeOptions) (*typ
 		if opts.WorkloadsDown {
 			c.setAllWorkloadsOnNodeDown(ctx, opts.Nodename)
 		}
-
 		// update node endpoint
 		if opts.Endpoint != "" {
 			n.Endpoint = opts.Endpoint
@@ -196,50 +131,76 @@ func (c *Calcium) SetNode(ctx context.Context, opts *types.SetNodeOptions) (*typ
 		if len(opts.Labels) != 0 {
 			n.Labels = opts.Labels
 		}
-
-		var originNodeResourceCapacity map[string]types.NodeResourceArgs
-		var err error
-
-		return logger.Err(ctx, utils.Txn(ctx,
-			// if: update node resource capacity success
-			func(ctx context.Context) error {
-				if len(opts.ResourceOpts) == 0 {
-					return nil
+		// update numa
+		if len(opts.NUMA) != 0 {
+			n.NUMA = opts.NUMA
+		}
+		// update numa memory
+		for numaNode, memoryDelta := range opts.DeltaNUMAMemory {
+			if _, ok := n.NUMAMemory[numaNode]; ok {
+				n.NUMAMemory[numaNode] += memoryDelta
+				n.InitNUMAMemory[numaNode] += memoryDelta
+				if n.NUMAMemory[numaNode] < 0 {
+					return logger.Err(ctx, errors.WithStack(types.ErrBadMemory))
 				}
-
-				originNodeResourceCapacity, _, err = c.resource.SetNodeResourceCapacity(ctx, n.Name, opts.ResourceOpts, nil, opts.Delta, resources.Incr)
-				return errors.WithStack(err)
-			},
-			// then: update node metadata
-			func(ctx context.Context) error {
-				if err := errors.WithStack(c.store.UpdateNodes(ctx, n)); err != nil {
-					return err
+			}
+		}
+		if opts.DeltaStorage != 0 {
+			// update storage
+			n.StorageCap += opts.DeltaStorage
+			n.InitStorageCap += opts.DeltaStorage
+			if n.StorageCap < 0 {
+				return logger.Err(ctx, errors.WithStack(types.ErrBadStorage))
+			}
+		}
+		if opts.DeltaMemory != 0 {
+			// update memory
+			n.MemCap += opts.DeltaMemory
+			n.InitMemCap += opts.DeltaMemory
+			if n.MemCap < 0 {
+				return logger.Err(ctx, errors.WithStack(types.ErrBadStorage))
+			}
+		}
+		// update cpu
+		for cpuID, cpuShare := range opts.DeltaCPU {
+			_, ok := n.CPU[cpuID]
+			switch {
+			case !ok && cpuShare > 0: // incr CPU
+				n.CPU[cpuID] = cpuShare
+				n.InitCPU[cpuID] = cpuShare
+			case ok: // decr share
+				n.CPU[cpuID] += cpuShare
+				n.InitCPU[cpuID] += cpuShare
+				if n.CPU[cpuID] < 0 {
+					return logger.Err(ctx, errors.WithStack(types.ErrBadCPU))
 				}
-				go c.SendNodeMetrics(ctx, node.Name)
-				return nil
-			},
-			// rollback: update node resource capacity in reverse
-			func(ctx context.Context, failureByCond bool) error {
-				if failureByCond {
-					return nil
+				if n.InitCPU[cpuID] == 0 {
+					// decr CPU
+					delete(n.CPU, cpuID)
+					delete(n.InitCPU, cpuID)
 				}
-				if len(opts.ResourceOpts) == 0 {
-					return nil
+			}
+		}
+		// update volume
+		for volumeDir, changeCap := range opts.DeltaVolume {
+			_, ok := n.Volume[volumeDir]
+			switch {
+			case !ok && changeCap > 0:
+				n.Volume[volumeDir] = changeCap
+				n.InitVolume[volumeDir] = changeCap
+			case ok && changeCap == 0:
+				delete(n.Volume, volumeDir)
+				delete(n.InitVolume, volumeDir)
+			case ok:
+				n.Volume[volumeDir] += changeCap
+				n.InitVolume[volumeDir] += changeCap
+				if n.Volume[volumeDir] < 0 {
+					return logger.Err(ctx, errors.WithStack(types.ErrBadVolume))
 				}
-				_, _, err = c.resource.SetNodeResourceCapacity(ctx, n.Name, nil, originNodeResourceCapacity, false, resources.Decr)
-				return errors.WithStack(err)
-			},
-			c.config.GlobalTimeout,
-		))
+			}
+		}
+		return logger.Err(ctx, errors.WithStack(c.store.UpdateNodes(ctx, n)))
 	})
-}
-
-func (c *Calcium) getNodeResourceInfo(ctx context.Context, node *types.Node) (err error) {
-	if node.ResourceCapacity, node.ResourceUsage, _, err = c.resource.GetNodeResourceInfo(ctx, node.Name, nil, false); err != nil {
-		log.Errorf(ctx, "[getNodeResourceInfo] failed to get node resource info for node %v, err: %v", node.Name, err)
-		return errors.WithStack(err)
-	}
-	return nil
 }
 
 func (c *Calcium) setAllWorkloadsOnNodeDown(ctx context.Context, nodename string) {

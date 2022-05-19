@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/projecteru2/core/log"
-	"github.com/projecteru2/core/resources"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
 
@@ -34,11 +33,9 @@ func (c *Calcium) DissociateWorkload(ctx context.Context, ids []string) (chan *t
 							ctx,
 							// if
 							func(ctx context.Context) (err error) {
-								resourceArgs := map[string]types.WorkloadResourceArgs{}
-								for plugin, args := range workload.ResourceArgs {
-									resourceArgs[plugin] = args
+								if err = c.store.UpdateNodeResource(ctx, node, &workload.ResourceMeta, types.ActionIncr); err == nil {
+									log.Infof(ctx, "[DissociateWorkload] Workload %s dissociated", workload.ID)
 								}
-								_, _, err = c.resource.SetNodeResourceUsage(ctx, node.Name, nil, nil, []map[string]types.WorkloadResourceArgs{resourceArgs}, true, resources.Decr)
 								return errors.WithStack(err)
 							},
 							// then
@@ -50,12 +47,7 @@ func (c *Calcium) DissociateWorkload(ctx context.Context, ids []string) (chan *t
 								if failedByCond {
 									return nil
 								}
-								resourceArgs := map[string]types.WorkloadResourceArgs{}
-								for plugin, args := range workload.ResourceArgs {
-									resourceArgs[plugin] = args
-								}
-								_, _, err = c.resource.SetNodeResourceUsage(ctx, node.Name, nil, nil, []map[string]types.WorkloadResourceArgs{resourceArgs}, true, resources.Incr)
-								return errors.WithStack(err)
+								return errors.WithStack(c.store.UpdateNodeResource(ctx, node, &workload.ResourceMeta, types.ActionDecr))
 							},
 							c.config.GlobalTimeout,
 						)

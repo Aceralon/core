@@ -7,8 +7,6 @@ import (
 	enginemocks "github.com/projecteru2/core/engine/mocks"
 	"github.com/projecteru2/core/lock"
 	lockmocks "github.com/projecteru2/core/lock/mocks"
-	"github.com/projecteru2/core/resources"
-	resourcemocks "github.com/projecteru2/core/resources/mocks"
 	storemocks "github.com/projecteru2/core/store/mocks"
 	"github.com/projecteru2/core/types"
 
@@ -123,11 +121,6 @@ func TestWithNodesPodLocked(t *testing.T) {
 	ctx := context.Background()
 	store := &storemocks.Store{}
 	c.store = store
-	plugin := c.resource.GetPlugins()[0].(*resourcemocks.Plugin)
-	plugin.On("GetNodeResourceInfo", mock.Anything, mock.Anything, mock.Anything).Return(&resources.GetNodeResourceInfoResponse{
-		ResourceInfo: &resources.NodeResourceInfo{},
-		Diffs:        []string{"hhh"},
-	}, nil)
 
 	node1 := &types.Node{
 		NodeMeta: types.NodeMeta{
@@ -185,11 +178,6 @@ func TestWithNodePodLocked(t *testing.T) {
 	ctx := context.Background()
 	store := &storemocks.Store{}
 	c.store = store
-	plugin := c.resource.GetPlugins()[0].(*resourcemocks.Plugin)
-	plugin.On("GetNodeResourceInfo", mock.Anything, mock.Anything, mock.Anything).Return(&resources.GetNodeResourceInfoResponse{
-		ResourceInfo: &resources.NodeResourceInfo{},
-		Diffs:        []string{"hhh"},
-	}, nil)
 
 	node1 := &types.Node{
 		NodeMeta: types.NodeMeta{
@@ -224,11 +212,6 @@ func TestWithNodesOperationLocked(t *testing.T) {
 	ctx := context.Background()
 	store := &storemocks.Store{}
 	c.store = store
-	plugin := c.resource.GetPlugins()[0].(*resourcemocks.Plugin)
-	plugin.On("GetNodeResourceInfo", mock.Anything, mock.Anything, mock.Anything).Return(&resources.GetNodeResourceInfoResponse{
-		ResourceInfo: &resources.NodeResourceInfo{},
-		Diffs:        []string{"hhh"},
-	}, nil)
 
 	node1 := &types.Node{
 		NodeMeta: types.NodeMeta{
@@ -285,11 +268,6 @@ func TestWithNodeOperationLocked(t *testing.T) {
 	ctx := context.Background()
 	store := &storemocks.Store{}
 	c.store = store
-	plugin := c.resource.GetPlugins()[0].(*resourcemocks.Plugin)
-	plugin.On("GetNodeResourceInfo", mock.Anything, mock.Anything, mock.Anything).Return(&resources.GetNodeResourceInfoResponse{
-		ResourceInfo: &resources.NodeResourceInfo{},
-		Diffs:        []string{"hhh"},
-	}, nil)
 
 	node1 := &types.Node{
 		NodeMeta: types.NodeMeta{

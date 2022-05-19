@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 
+	"github.com/projecteru2/core/strategy"
 	"github.com/projecteru2/core/types"
 )
 
@@ -21,9 +22,10 @@ func (s *RediaronTestSuite) TestProcessing() {
 	s.Error(s.rediaron.CreateProcessing(ctx, processing, 10))
 	s.NoError(s.rediaron.AddWorkload(ctx, &types.Workload{Name: "a_b_c"}, processing))
 
-	nodeCount, err := s.rediaron.doLoadProcessing(ctx, processing.Appname, processing.Entryname)
+	sis := []strategy.Info{{Nodename: "node"}}
+	err := s.rediaron.doLoadProcessing(ctx, processing.Appname, processing.Entryname, sis)
 	s.NoError(err)
-	s.Equal(nodeCount["node"], 9)
+	s.Equal(sis[0].Count, 9)
 	// delete
 	s.NoError(s.rediaron.DeleteProcessing(ctx, processing))
 }

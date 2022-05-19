@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/projecteru2/core/auth"
 	"github.com/projecteru2/core/cluster/calcium"
 	"github.com/projecteru2/core/engine/factory"
@@ -25,6 +23,7 @@ import (
 	"github.com/projecteru2/core/version"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	cli "github.com/urfave/cli/v2"
 	_ "go.uber.org/automaxprocs"
 	"google.golang.org/grpc"
@@ -67,6 +66,11 @@ func serve(c *cli.Context) error {
 		log.Warnf(nil, "[main] sentry %v", err) //nolint
 	} else if sentryDefer != nil {
 		defer sentryDefer()
+	}
+
+	if err := metrics.InitMetrics(config); err != nil {
+		log.Errorf(nil, "[main] %v", err) //nolint
+		return err
 	}
 
 	// init engine cache and start engine cache checker

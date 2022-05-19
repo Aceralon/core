@@ -2,16 +2,14 @@ package types
 
 // VirtualizationResource define resources
 type VirtualizationResource struct {
-	EngineArgs    map[string]interface{}      `json:"-"`
-	CPU           map[string]int64            `json:"cpu_map"` // for cpu binding
-	Quota         float64                     `json:"cpu"`     // for cpu quota
-	Memory        int64                       `json:"memory"`  // for memory binding
-	Storage       int64                       `json:"storage"`
-	NUMANode      string                      `json:"numa_node"` // numa node
-	Volumes       []string                    `json:"volumes"`
-	VolumePlan    map[string]map[string]int64 `json:"volume_plan"`    // literal VolumePlan
-	VolumeChanged bool                        `json:"volume_changed"` // indicate whether new volumes contained in realloc request
-	Remap         bool                        `json:"remap"`
+	CPU           map[string]int64 // for cpu binding
+	Quota         float64          // for cpu quota
+	Memory        int64            // for memory binding
+	Storage       int64
+	NUMANode      string // numa node
+	Volumes       []string
+	VolumePlan    map[string]map[string]int64 // literal VolumePlan
+	VolumeChanged bool                        // indicate whether new volumes contained in realloc request
 }
 
 // VirtualizationCreateOptions use for create virtualization target
@@ -35,6 +33,8 @@ type VirtualizationCreateOptions struct {
 	Restart string
 
 	Networks map[string]string
+
+	Volumes []string
 
 	LogType   string
 	LogConfig map[string]string
