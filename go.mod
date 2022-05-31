@@ -139,6 +139,4 @@ require (
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 
-replace	(
-	github.com/projecteru2/libyavirt => github.com/aceralon/libyavirt v0.0.0-20220518074534-f608af6d9ef2
-)
+replace github.com/projecteru2/libyavirt => github.com/aceralon/libyavirt v0.0.0-20220518074534-f608af6d9ef2
